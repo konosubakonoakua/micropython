@@ -222,8 +222,13 @@ STATIC mp_obj_t network_cyw43_scan(size_t n_args, const mp_obj_t *pos_args, mp_m
 
     // Wait for scan to finish, with a 10s timeout
     uint32_t start = mp_hal_ticks_ms();
-    while (cyw43_wifi_scan_active(self->cyw) && mp_hal_ticks_ms() - start < 10000) {
-        MICROPY_EVENT_POLL_HOOK
+    const uint32_t TIMEOUT = 10000;
+    while (cyw43_wifi_scan_active(self->cyw)) {
+        uint32_t elapsed = mp_hal_ticks_ms() - start;
+        if (elapsed >= TIMEOUT) {
+            break;
+        }
+        mp_event_wait_ms(TIMEOUT - elapsed);
     }
 
     return res;
@@ -422,7 +427,7 @@ STATIC mp_obj_t network_cyw43_config(size_t n_args, const mp_obj_t *args, mp_map
             }
             case MP_QSTR_hostname: {
                 // TODO: Deprecated. Use network.hostname() instead.
-                return mp_obj_new_str(mod_network_hostname, strlen(mod_network_hostname));
+                return mod_network_hostname(0, NULL);
             }
             default:
                 mp_raise_ValueError(MP_ERROR_TEXT("unknown config param"));
@@ -498,12 +503,7 @@ STATIC mp_obj_t network_cyw43_config(size_t n_args, const mp_obj_t *args, mp_map
                     }
                     case MP_QSTR_hostname: {
                         // TODO: Deprecated. Use network.hostname(name) instead.
-                        size_t len;
-                        const char *str = mp_obj_str_get_data(e->value, &len);
-                        if (len >= MICROPY_PY_NETWORK_HOSTNAME_MAX_LEN) {
-                            mp_raise_ValueError(NULL);
-                        }
-                        strcpy(mod_network_hostname, str);
+                        mod_network_hostname(1, &e->value);
                         break;
                     }
                     default:

@@ -318,11 +318,7 @@ typedef struct _lwip_socket_obj_t {
 } lwip_socket_obj_t;
 
 static inline void poll_sockets(void) {
-    #ifdef MICROPY_EVENT_POLL_HOOK
-    MICROPY_EVENT_POLL_HOOK;
-    #else
-    mp_hal_delay_ms(1);
-    #endif
+    mp_event_wait_ms(1);
 }
 
 STATIC struct tcp_pcb *volatile *lwip_socket_incoming_array(lwip_socket_obj_t *socket) {
@@ -1382,9 +1378,9 @@ STATIC mp_obj_t lwip_socket_setsockopt(size_t n_args, const mp_obj_t *args) {
             mp_int_t val = mp_obj_get_int(args[3]);
             // Options are common for UDP and TCP pcb's.
             if (val) {
-                ip_set_option(socket->pcb.tcp, SOF_REUSEADDR);
+                ip_set_option(socket->pcb.tcp, opt);
             } else {
-                ip_reset_option(socket->pcb.tcp, SOF_REUSEADDR);
+                ip_reset_option(socket->pcb.tcp, opt);
             }
             break;
         }

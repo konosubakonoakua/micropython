@@ -57,16 +57,17 @@
 // uses mp_vfs_import_stat) to also search frozen modules. Given an exact
 // path to a file or directory (e.g. "foo/bar", foo/bar.py" or "foo/bar.mpy"),
 // will return whether the path is a file, directory, or doesn't exist.
-STATIC mp_import_stat_t stat_path(const char *path) {
+STATIC mp_import_stat_t stat_path(vstr_t *path) {
+    const char *str = vstr_null_terminated_str(path);
     #if MICROPY_MODULE_FROZEN
     // Only try and load as a frozen module if it starts with .frozen/.
     const int frozen_path_prefix_len = strlen(MP_FROZEN_PATH_PREFIX);
-    if (strncmp(path, MP_FROZEN_PATH_PREFIX, frozen_path_prefix_len) == 0) {
+    if (strncmp(str, MP_FROZEN_PATH_PREFIX, frozen_path_prefix_len) == 0) {
         // Just stat (which is the return value), don't get the data.
-        return mp_find_frozen_module(path + frozen_path_prefix_len, NULL, NULL);
+        return mp_find_frozen_module(str + frozen_path_prefix_len, NULL, NULL);
     }
     #endif
-    return mp_import_stat(path);
+    return mp_import_stat(str);
 }
 
 // Stat a given filesystem path to a .py file. If the file does not exist,
@@ -75,7 +76,7 @@ STATIC mp_import_stat_t stat_path(const char *path) {
 // files. This uses stat_path above, rather than mp_import_stat directly, so
 // that the .frozen path prefix is handled.
 STATIC mp_import_stat_t stat_file_py_or_mpy(vstr_t *path) {
-    mp_import_stat_t stat = stat_path(vstr_null_terminated_str(path));
+    mp_import_stat_t stat = stat_path(path);
     if (stat == MP_IMPORT_STAT_FILE) {
         return stat;
     }
@@ -85,7 +86,7 @@ STATIC mp_import_stat_t stat_file_py_or_mpy(vstr_t *path) {
     // Note: There's no point doing this if it's a frozen path, but adding the check
     // would be extra code, and no harm letting mp_find_frozen_module fail instead.
     vstr_ins_byte(path, path->len - 2, 'm');
-    stat = stat_path(vstr_null_terminated_str(path));
+    stat = stat_path(path);
     if (stat == MP_IMPORT_STAT_FILE) {
         return stat;
     }
@@ -99,7 +100,7 @@ STATIC mp_import_stat_t stat_file_py_or_mpy(vstr_t *path) {
 // result is a file, the path argument will be updated to include the file
 // extension.
 STATIC mp_import_stat_t stat_module(vstr_t *path) {
-    mp_import_stat_t stat = stat_path(vstr_null_terminated_str(path));
+    mp_import_stat_t stat = stat_path(path);
     DEBUG_printf("stat %s: %d\n", vstr_str(path), stat);
     if (stat == MP_IMPORT_STAT_DIR) {
         return stat;
@@ -164,11 +165,11 @@ STATIC void do_load_from_lexer(mp_module_context_t *context, mp_lexer_t *lex) {
 #endif
 
 #if (MICROPY_HAS_FILE_READER && MICROPY_PERSISTENT_CODE_LOAD) || MICROPY_MODULE_FROZEN_MPY
-STATIC void do_execute_raw_code(const mp_module_context_t *context, const mp_raw_code_t *rc, const char *source_name) {
-    (void)source_name;
-
+STATIC void do_execute_raw_code(const mp_module_context_t *context, const mp_raw_code_t *rc, qstr source_name) {
     #if MICROPY_PY___FILE__
-    mp_store_attr(MP_OBJ_FROM_PTR(&context->module), MP_QSTR___file__, MP_OBJ_NEW_QSTR(qstr_from_str(source_name)));
+    mp_store_attr(MP_OBJ_FROM_PTR(&context->module), MP_QSTR___file__, MP_OBJ_NEW_QSTR(source_name));
+    #else
+    (void)source_name;
     #endif
 
     // execute the module in its context
@@ -224,7 +225,12 @@ STATIC void do_load(mp_module_context_t *module_obj, vstr_t *file) {
         if (frozen_type == MP_FROZEN_MPY) {
             const mp_frozen_module_t *frozen = modref;
             module_obj->constants = frozen->constants;
-            do_execute_raw_code(module_obj, frozen->rc, file_str + frozen_path_prefix_len);
+            #if MICROPY_PY___FILE__
+            qstr frozen_file_qstr = qstr_from_str(file_str + frozen_path_prefix_len);
+            #else
+            qstr frozen_file_qstr = MP_QSTRnull;
+            #endif
+            do_execute_raw_code(module_obj, frozen->rc, frozen_file_qstr);
             return;
         }
         #endif
@@ -232,14 +238,16 @@ STATIC void do_load(mp_module_context_t *module_obj, vstr_t *file) {
 
     #endif // MICROPY_MODULE_FROZEN
 
+    qstr file_qstr = qstr_from_str(file_str);
+
     // If we support loading .mpy files then check if the file extension is of
     // the correct format and, if so, load and execute the file.
     #if MICROPY_HAS_FILE_READER && MICROPY_PERSISTENT_CODE_LOAD
     if (file_str[file->len - 3] == 'm') {
         mp_compiled_module_t cm;
         cm.context = module_obj;
-        mp_raw_code_load_file(file_str, &cm);
-        do_execute_raw_code(cm.context, cm.rc, file_str);
+        mp_raw_code_load_file(file_qstr, &cm);
+        do_execute_raw_code(cm.context, cm.rc, file_qstr);
         return;
     }
     #endif
@@ -247,7 +255,7 @@ STATIC void do_load(mp_module_context_t *module_obj, vstr_t *file) {
     // If we can compile scripts then load the file and compile and execute it.
     #if MICROPY_ENABLE_COMPILER
     {
-        mp_lexer_t *lex = mp_lexer_new_from_file(file_str);
+        mp_lexer_t *lex = mp_lexer_new_from_file(file_qstr);
         do_load_from_lexer(module_obj, lex);
         return;
     }
